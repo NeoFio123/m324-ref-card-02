@@ -109,21 +109,25 @@ jobs:
         run: docker logs app || true
 
       # Ab hier nur bei Push/manuellem Start, nicht bei Pull Requests
-      # Pruefen, ob die Docker-Hub-Secrets gesetzt sind (klare Fehlermeldung statt kryptischem Login-Fehler)
-      - name: Secrets pruefen
+      # Pruefen, ob Docker-Hub-Secrets gesetzt sind: ja -> Docker Hub + ghcr, nein -> nur ghcr
+      - name: Ziel-Registries bestimmen
+        id: reg
         if: github.event_name != 'pull_request'
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
-            echo "::error::Secrets DOCKERHUB_USERNAME und/oder DOCKERHUB_TOKEN fehlen (Repo > Settings > Secrets and variables > Actions)"
-            exit 1
+          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
+            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN nicht gesetzt -> Push nur zu ghcr.io"
           fi
 
       # Bei Docker Hub anmelden (Access Token statt Passwort)
       - name: Login Docker Hub
-        if: github.event_name != 'pull_request'
+        if: steps.reg.outputs.dockerhub == 'true'
         uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -139,14 +143,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ghcr verlangt Kleinbuchstaben im Image-Namen -> Owner in lowercase umwandeln
-      - name: ghcr-Image-Namen setzen
-        if: github.event_name != 'pull_request'
-        run: echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
-
       # Image pushen: Tag "latest" + Tag mit Commit-SHA (eindeutig nachvollziehbar)
       # Dank Cache wird hier nicht neu gebaut, sondern das getestete Image hochgeladen
-      - name: Image pushen (Docker Hub + ghcr)
+      - name: Image pushen (ghcr + Docker Hub)
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
@@ -155,7 +154,7 @@ jobs:
           cache-from: type=gha
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.GHCR_IMAGE }}:latest
-            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ steps.reg.outputs.ghcr }}:latest
+            ${{ steps.reg.outputs.ghcr }}:${{ github.sha }}
+            ${{ steps.reg.outputs.dockerhub == 'true' && format('docker.io/{0}/{1}:latest', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME) || '' }}
+            ${{ steps.reg.outputs.dockerhub == 'true' && format('docker.io/{0}/{1}:{2}', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME, github.sha) || '' }}
