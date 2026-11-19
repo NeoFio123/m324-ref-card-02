@@ -33,8 +33,8 @@ jobs:
           cache: npm
 
       # Exakt die Versionen aus package-lock.json installieren (reproduzierbar)
-      - name: Dependencies installieren (npm ci)
-        run: npm ci
+      - name: Dependencies installieren (npm install)
+        run: npm install --no-audit --no-fund --legacy-peer-deps
 
       # ESLint: Code-Qualitaet pruefen, jede Warnung laesst die Pipeline fehlschlagen
       - name: Linter (ESLint)

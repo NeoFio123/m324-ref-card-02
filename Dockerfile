@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Zuerst nur package*.json kopieren -> npm-Install wird als eigener Layer gecacht
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund --legacy-peer-deps
 
 # Dann den Quellcode kopieren und bauen
 COPY public ./public
