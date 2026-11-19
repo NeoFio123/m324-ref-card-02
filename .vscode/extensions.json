@@ -1,0 +1,10 @@
+{
+  // VS Code schlaegt diese Extensions beim Oeffnen des Ordners vor
+  "recommendations": [
+    "orta.vscode-jest",                  // Jest-Tests im Testing-Panel (gruene/rote Haken)
+    "dbaeumer.vscode-eslint",            // ESLint-Fehler direkt im Editor
+    "ms-azuretools.vscode-containers",   // Dockerfile, Images, Container
+    "github.vscode-github-actions",      // Workflows ansehen + YAML pruefen
+    "usernamehw.errorlens"               // Fehler direkt in der Zeile anzeigen
+  ]
+}

@@ -1,0 +1,161 @@
+# CI/CD-Pipeline fuer RefCard02 (React)
+# Ablauf: 1) Lint + Tests + Build  ->  2) Docker-Image bauen + Smoke-Test  ->  3) Push zu Docker Hub und ghcr.io
+name: CI/CD RefCard02
+
+# Wann laeuft die Pipeline?
+on:
+  push:
+    branches: [ main ]          # bei jedem Push auf main
+  pull_request:
+    branches: [ main ]          # bei Pull Requests nur testen, nichts deployen
+  workflow_dispatch:            # Button "Run workflow" im Actions-Tab
+
+# Name des Images (Docker Hub: <user>/refcard02, ghcr: ghcr.io/<owner>/refcard02)
+env:
+  IMAGE_NAME: refcard02
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: Linter, Tests und Build
+  # ---------------------------------------------------------------
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      # Repository-Code auf den Runner holen
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Node 22 installieren; npm-Cache wird zwischen Runs wiederverwendet
+      - name: Node 22 einrichten
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Exakt die Versionen aus package-lock.json installieren (reproduzierbar)
+      - name: Dependencies installieren (npm ci)
+        run: npm ci
+
+      # ESLint: Code-Qualitaet pruefen, jede Warnung laesst die Pipeline fehlschlagen
+      - name: Linter (ESLint)
+        run: npm run lint
+
+      # Jest-Tests einmalig (ohne Watch-Modus) inkl. Coverage ausfuehren
+      - name: Tests (Jest)
+        run: npm run test:ci
+
+      # Produktions-Build erstellen (CI=true macht Warnungen zu Fehlern)
+      - name: Build
+        run: npm run build
+
+      # Coverage-Bericht als Artefakt speichern (auch bei fehlgeschlagenen Tests)
+      - name: Coverage-Bericht hochladen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage/
+
+      # Gebaute statische Dateien als Artefakt speichern
+      - name: Build hochladen
+        uses: actions/upload-artifact@v7
+        with:
+          name: react-build
+          path: build/
+
+  # ---------------------------------------------------------------
+  # Job 2: Docker-Image bauen, testen und deployen
+  # Laeuft nur, wenn Job 1 erfolgreich war (needs)
+  # ---------------------------------------------------------------
+  docker:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write           # noetig fuer den Push zu ghcr.io mit GITHUB_TOKEN
+    steps:
+      # Repository-Code holen (Dockerfile + Quellcode)
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Buildx = moderner Docker-Builder (unterstuetzt Caching)
+      - name: Docker Buildx einrichten
+        uses: docker/setup-buildx-action@v4
+
+      # Image bauen und lokal laden (noch nicht pushen), damit wir es testen koennen
+      - name: Image bauen (lokal)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke-Test: Container starten und pruefen, ob Nginx die React-App ausliefert
+      - name: Smoke-Test des Containers
+        run: |
+          docker run -d --name app -p 8080:80 ${{ env.IMAGE_NAME }}:test
+          for i in $(seq 1 15); do
+            if curl -fs http://localhost:8080/ > /dev/null; then echo "Nginx antwortet nach ${i}s"; break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/ | grep -q '<div id="root">' \
+            || { echo "::error::index.html der React-App wird nicht ausgeliefert"; exit 1; }
+
+      # Bei Fehler: Container-Logs ausgeben, damit man den Grund sieht
+      - name: Container-Logs bei Fehler
+        if: failure()
+        run: docker logs app || true
+
+      # Ab hier nur bei Push/manuellem Start, nicht bei Pull Requests
+      # Pruefen, ob die Docker-Hub-Secrets gesetzt sind (klare Fehlermeldung statt kryptischem Login-Fehler)
+      - name: Secrets pruefen
+        if: github.event_name != 'pull_request'
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error::Secrets DOCKERHUB_USERNAME und/oder DOCKERHUB_TOKEN fehlen (Repo > Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+
+      # Bei Docker Hub anmelden (Access Token statt Passwort)
+      - name: Login Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Bei der GitHub Container Registry anmelden (Zusatzaufgabe ghcr), GITHUB_TOKEN gibt es automatisch
+      - name: Login ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr verlangt Kleinbuchstaben im Image-Namen -> Owner in lowercase umwandeln
+      - name: ghcr-Image-Namen setzen
+        if: github.event_name != 'pull_request'
+        run: echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
+
+      # Image pushen: Tag "latest" + Tag mit Commit-SHA (eindeutig nachvollziehbar)
+      # Dank Cache wird hier nicht neu gebaut, sondern das getestete Image hochgeladen
+      - name: Image pushen (Docker Hub + ghcr)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          cache-from: type=gha
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:latest
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}

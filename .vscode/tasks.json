@@ -1,0 +1,39 @@
+{
+  // Terminal > Run Task...
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Tests: Jest einmal ausfuehren (wie in der Pipeline)",
+      "type": "shell",
+      "command": "npm run test:ci",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Lint: ESLint",
+      "type": "shell",
+      "command": "npm run lint",
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "Dev-Server starten (localhost:3000)",
+      "type": "shell",
+      "command": "npm start",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Image bauen",
+      "type": "shell",
+      "command": "docker build -t refcard02 .",
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Container starten (localhost:8081)",
+      "type": "shell",
+      "command": "docker run --rm -p 8081:80 --name refcard02 refcard02",
+      "dependsOn": "Docker: Image bauen",
+      "problemMatcher": []
+    }
+  ]
+}

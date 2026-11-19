@@ -1,0 +1,10 @@
+{
+  // Jest-Extension: Create-React-App-Tests ueber npm starten, nur auf Klick (nicht dauernd im Hintergrund)
+  "jest.jestCommandLine": "npm test --",
+  "jest.runMode": "on-demand",
+  "eslint.validate": ["javascript", "javascriptreact"],
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/build": true
+  }
+}
